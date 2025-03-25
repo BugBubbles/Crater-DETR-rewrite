@@ -440,6 +440,7 @@ class CraterDETR(DeformableDETR):
                 enc_outputs_class=topk_score,
                 enc_outputs_coord=topk_coords,
                 dn_meta=dn_meta,
+                aux_head_output=aux_head_output,
             )
             if self.training
             else dict()
@@ -559,7 +560,11 @@ class CraterDETR(DeformableDETR):
         )
 
     def predict(
-        self, batch_inputs: Tensor, batch_data_samples: SampleList, rescale: bool = True
+        self,
+        batch_inputs: Tensor,
+        batch_data_samples: SampleList,
+        rescale: bool = True,
+        **kwargs,
     ) -> SampleList:
         """Predict results from a batch of inputs and data samples with post-
         processing.

@@ -129,6 +129,13 @@ class AdnQueryGenerator(CdnQueryGenerator):
         adn_label_query, adn_bbox_query = self.collate_adn_queries(
             adn_label_query, adn_bbox_query, batch_idx, len(batch_data_samples), 1
         )
+
+        dn_meta = dict(
+            num_cdn_queries=dn_label_query.shape[1],
+            num_adn_queries=adn_label_query.shape[1],
+            num_denoising_groups=num_groups,
+        )
+
         dn_label_query = torch.cat([adn_label_query, dn_label_query], dim=1)
         dn_bbox_query = torch.cat([adn_bbox_query, dn_bbox_query], dim=1)
 
@@ -138,11 +145,6 @@ class AdnQueryGenerator(CdnQueryGenerator):
             num_groups,
             adn_label_query.shape[1],
             device=dn_label_query.device,
-        )
-
-        dn_meta = dict(
-            num_denoising_queries=dn_label_query.shape[1],
-            num_denoising_groups=num_groups,
         )
 
         return dn_label_query, dn_bbox_query, attn_mask, dn_meta
