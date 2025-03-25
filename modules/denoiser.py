@@ -1,10 +1,12 @@
-from typing import Union
+from typing import Union, Tuple
 import torch
 from torch import Tensor
 from mmdet.registry import TASK_UTILS
 from mmdet.structures import SampleList
 from mmdet.models.layers import CdnQueryGenerator
 from mmengine.structures import InstanceData
+from mmdet.models.layers import inverse_sigmoid
+from mmdet.structures.bbox import bbox_xyxy_to_cxcywh
 
 
 @TASK_UTILS.register_module()
@@ -19,6 +21,10 @@ class AdnQueryGenerator(CdnQueryGenerator):
 
     Code is rewrited by BugBubbles: holy221aba@gmail.com`_.
     """
+
+    def __init__(self, *args, conf_thr=0.5, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.conf_thr = conf_thr
 
     def __call__(
         self,
@@ -80,19 +86,17 @@ class AdnQueryGenerator(CdnQueryGenerator):
             bboxes_normalized = bboxes / factor
             gt_bboxes_list.append(bboxes_normalized)
             gt_labels_list.append(sample.gt_instances.labels)
-            aux_bboxes_list.append(aux_bboxes)
+            aux_bboxes_list.append(aux_bboxes / factor)
             aux_labels_list.append(aux_pred.labels)
         gt_labels = torch.cat(gt_labels_list)  # (num_target_total, 4)
         gt_bboxes = torch.cat(gt_bboxes_list)
-        length = min(map(len, aux_labels_list))
         # if the auxiliary head outputs the same number of bboxes and labels
         # for each sample, we can stack them directly so we should keep the
         # same length for each sample
-        aux_bboxes = torch.stack([bbox[:length] for bbox in aux_bboxes_list])
-        aux_scores = torch.stack([label[:length] for label in aux_labels_list])
+        aux_bboxes = torch.cat(aux_bboxes_list)
+        aux_labels = torch.cat(aux_labels_list)
 
-        num_target_list = [len(bboxes) for bboxes in gt_bboxes_list]
-        max_num_target = max(num_target_list)
+        max_num_target = max(map(len, gt_bboxes_list))
         num_groups = self.get_num_groups(max_num_target)
 
         dn_label_query = self.generate_dn_label_query(gt_labels, num_groups)
@@ -115,18 +119,24 @@ class AdnQueryGenerator(CdnQueryGenerator):
         # noted that auxiliary outputs should detach from gradient to
         # prevent the transformer decoder gradient backpropagating to
         # the auxiliary head
-        adn_label_query = self.label_embedding(aux_scores)
-
-        dn_label_query = torch.cat([dn_label_query, adn_label_query], dim=1)
-        dn_bbox_query = torch.cat(
-            [dn_bbox_query, aux_bboxes.detach().requires_grad_()], dim=1
+        # encode automatic denoising bbox
+        adn_label_query = self.label_embedding(aux_labels.detach())
+        aux_bboxes = bbox_xyxy_to_cxcywh(aux_bboxes.detach())
+        adn_bbox_query = inverse_sigmoid(aux_bboxes, eps=1e-3)
+        batch_idx = torch.cat(
+            [torch.full_like(t.long(), i) for i, t in enumerate(aux_labels_list)]
         )
+        adn_label_query, adn_bbox_query = self.collate_adn_queries(
+            adn_label_query, adn_bbox_query, batch_idx, len(batch_data_samples), 1
+        )
+        dn_label_query = torch.cat([adn_label_query, dn_label_query], dim=1)
+        dn_bbox_query = torch.cat([adn_bbox_query, dn_bbox_query], dim=1)
 
         # attention mask is the combination of cdn and adn attention mask
         attn_mask = self.generate_dn_mask(
             max_num_target,
             num_groups,
-            aux_scores.shape[1],
+            adn_label_query.shape[1],
             device=dn_label_query.device,
         )
 
@@ -136,6 +146,79 @@ class AdnQueryGenerator(CdnQueryGenerator):
         )
 
         return dn_label_query, dn_bbox_query, attn_mask, dn_meta
+
+    def collate_adn_queries(
+        self,
+        input_label_query: Tensor,
+        input_bbox_query: Tensor,
+        batch_idx: Tensor,
+        batch_size: int,
+        num_groups: int,
+    ) -> Tuple[Tensor]:
+        """Collate generated queries to obtain batched dn queries.
+
+        The strategy for query collation is as follow:
+
+        .. code:: text
+
+                    input_queries (num_target_total, query_dim)
+            P_A1 P_B1 P_B2 N_A1 N_B1 N_B2 P'A1 P'B1 P'B2 N'A1 N'B1 N'B2
+              |________ group1 ________|    |________ group2 ________|
+                                         |
+                                         V
+                      P_A1 Pad0 N_A1 Pad0 P'A1 Pad0 N'A1 Pad0
+                      P_B1 P_B2 N_B1 N_B2 P'B1 P'B2 N'B1 N'B2
+                       |____ group1 ____| |____ group2 ____|
+             batched_queries (batch_size, max_num_target, query_dim)
+
+            where query_dim is 4 for bbox and self.embed_dims for label.
+            Notation: _-group 1; '-group 2;
+                      A-Sample1(has 1 target); B-sample2(has 2 targets)
+
+        Args:
+            input_label_query (Tensor): The generated label queries of all
+                targets, has shape (num_target_total, embed_dims) where
+                `num_target_total = sum(num_target_list)`.
+            input_bbox_query (Tensor): The generated bbox queries of all
+                targets, has shape (num_target_total, 4) with the last
+                dimension arranged as (cx, cy, w, h).
+            batch_idx (Tensor): The batch index of the corresponding sample
+                for each target, has shape (num_target_total).
+            batch_size (int): The size of the input batch.
+            num_groups (int): The number of denoising query groups.
+
+        Returns:
+            tuple[Tensor]: Output batched label and bbox queries.
+            - batched_label_query (Tensor): The output batched label queries,
+              has shape (batch_size, max_num_target, embed_dims).
+            - batched_bbox_query (Tensor): The output batched bbox queries,
+              has shape (batch_size, max_num_target, 4) with the last dimension
+              arranged as (cx, cy, w, h).
+        """
+        device = input_label_query.device
+        num_target_list = [torch.sum(batch_idx == idx) for idx in range(batch_size)]
+        max_num_target = max(num_target_list)
+        num_denoising_queries = int(max_num_target * num_groups)
+
+        map_query_index = torch.cat(
+            [torch.arange(num_target, device=device) for num_target in num_target_list]
+        )
+        map_query_index = torch.cat(
+            [map_query_index + max_num_target * i for i in range(num_groups)]
+        ).long()
+        batch_idx_expand = batch_idx.repeat(num_groups, 1).view(-1)
+        mapper = (batch_idx_expand, map_query_index)
+
+        batched_label_query = torch.zeros(
+            batch_size, num_denoising_queries, self.embed_dims, device=device
+        )
+        batched_bbox_query = torch.zeros(
+            batch_size, num_denoising_queries, 4, device=device
+        )
+
+        batched_label_query[mapper] = input_label_query
+        batched_bbox_query[mapper] = input_bbox_query
+        return batched_label_query, batched_bbox_query
 
     def generate_dn_mask(
         self,
@@ -202,6 +285,7 @@ class AdnQueryGenerator(CdnQueryGenerator):
 
         ## for adn part
         attn_mask[num_adn_queries:num_denoising_queries, :num_adn_queries] = True
+        attn_mask[:num_adn_queries, num_adn_queries:num_denoising_queries] = True
 
         ## for cdn part
         for i in range(num_groups):
@@ -215,7 +299,7 @@ class AdnQueryGenerator(CdnQueryGenerator):
             )
             right_scope = slice(
                 num_adn_queries + max_num_target * 2 * (i + 1),
-                num_adn_queries + num_denoising_queries,
+                num_denoising_queries,
             )
             attn_mask[row_scope, right_scope] = True
             attn_mask[row_scope, left_scope] = True

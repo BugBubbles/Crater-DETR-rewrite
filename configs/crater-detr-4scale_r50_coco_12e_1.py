@@ -46,8 +46,9 @@ model = dict(
           base_sizes=[[(116, 90), (156, 198), (373, 326)],
                       [(30, 61), (62, 45), (59, 119)],
                       [(10, 13), (16, 30), (33, 23)]],
-          strides=[64, 48, 32]),
-          featmap_strides=[16, 8, 4]),
+          strides=[64, 32, 32]
+          ),
+          featmap_strides=[64, 32, 32]),
     data_preprocessor=dict(
         bgr_to_rgb=True,
         mean=[
@@ -104,7 +105,11 @@ model = dict(
     num_queries=900,
     positional_encoding=dict(
         normalize=True, num_feats=128, offset=0.0, temperature=20),
-    test_cfg=dict(max_per_img=300),
+    test_cfg=dict(max_per_img=300,        
+                  nms=dict(iou_threshold=0.5, type='nms'),
+                  nms_pre=1000,
+                  conf_thr=0.4
+                  ),
     train_cfg=dict(
         bbox_head=dict(
           assigner=dict(

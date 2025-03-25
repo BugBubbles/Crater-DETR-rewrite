@@ -414,8 +414,7 @@ class CraterDETR(DeformableDETR):
         topk_coords = topk_coords_unact.sigmoid()
         topk_coords_unact = topk_coords_unact.detach()
 
-        query = self.query_embedding.weight[:, None, :]
-        query = query.repeat(1, bs, 1).transpose(0, 1)
+        query = self.query_embedding.weight.repeat(bs, 1, 1)
         if self.training:
             dn_label_query, dn_bbox_query, dn_mask, dn_meta = self.dn_query_generator(
                 batch_data_samples, aux_head_output
