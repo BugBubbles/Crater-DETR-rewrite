@@ -39,8 +39,8 @@ class CRAU(nn.Module):
         # divisor = torch.ones_like(src)
         # divisor = self.query_unfold(divisor).view(b, c, self.w * self.h, -1).flatten(2).transpose(1, 2)
         query = self.attn(query=query, key=kv, value=kv)
-        query = query.transpose(1, 2).view(b, c, self.w * self.h, -1).flatten(1, 2)
-        return self.query_fold(query, output_size=size)
+        query = query.transpose(1, 2).view(b, c, self.kernel_numel, -1).flatten(1, 2)
+        return self.query_fold(query, output_size=size) * src
 
 
 class CRAP(nn.Module):
@@ -60,54 +60,50 @@ class CRAP(nn.Module):
         kv = self.key_value_unfold(src).view(b, c, self.kernel_numel, -1)
         kv = kv.flatten(2).transpose(1, 2)
         query = self.attn(query=query, key=kv, value=kv).transpose(1, 2)
-        return self.query_fold(query, output_size=size)
+        return self.query_fold(query, output_size=size) * feat
 
 
 @MODELS.register_module()
 class CraterDETRFPN(BaseModel):
     def __init__(
         self,
-        in_channels: List[int],
+        in_channels: int,
         out_channels: int,
+        num_levels=4,
         ksize: int = 3,
         stride: int = 2,
         start_level: int = 0,
         end_level: int = -1,
-        downsample_cfg: ConfigType = dict(mode="nearest"),
         init_cfg: MultiConfig = dict(
             type="Xavier", layer="Conv2d", distribution="uniform"
         ),
     ) -> None:
         super().__init__(init_cfg=init_cfg)
-        assert isinstance(in_channels, list)
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.num_ins = len(in_channels)
+        self.num_levels = num_levels
         self.fp16_enabled = False
-        self.downsample_cfg = downsample_cfg.copy()
 
-        if end_level == -1 or end_level == self.num_ins - 1:
-            self.backbone_end_level = self.num_ins
+        if end_level == -1 or end_level == num_levels - 1:
+            self.backbone_end_level = num_levels
         else:
             # if end_level is not the last level, no extra level is allowed
             self.backbone_end_level = end_level + 1
-            assert end_level < self.num_ins
+            assert end_level < num_levels
         self.start_level = start_level
         self.end_level = end_level
 
         self.craus = nn.ModuleList()
         self.craps = nn.ModuleList()
 
-        for i in range(self.start_level, self.backbone_end_level):
-            crau = CRAU(in_channels[i], (ksize, ksize), stride)
+        for _ in range(self.start_level, self.backbone_end_level):
+            crau = CRAU(in_channels, (ksize, ksize), stride)
             crap = CRAP(out_channels, (ksize, ksize), stride)
 
             self.craus.append(crau)
             self.craps.append(crap)
 
-    def forward(
-        self, inputs: Tuple[Tensor], memory: Tensor, spatial_shapes: Tensor
-    ) -> tuple:
+    def forward(self, inputs: Tuple[Tensor], memory: Tensor) -> tuple:
         """Forward function.
 
         Args:
@@ -117,8 +113,6 @@ class CraterDETRFPN(BaseModel):
         Returns:
             tuple: Feature maps, each is a 4D-tensor.
         """
-        assert len(inputs) == len(self.in_channels)
-
         # build laterals
         laterals = [*inputs[self.start_level : self.backbone_end_level - 1], memory]
         # build top-down path
@@ -128,18 +122,11 @@ class CraterDETRFPN(BaseModel):
             laterals[i - 1] = self.craus[i](laterals[i], laterals[i - 1])
 
         # build outputs
-        memory_list = [laterals[0]] + [
-            self.craps[i](
-                F.interpolate(
-                    laterals[i],
-                    size=(*spatial_shapes[self.start_level + i + 1],),
-                    **self.downsample_cfg,
-                ),
-                laterals[i],
-            )
+        laterals = [laterals[0]] + [
+            self.craps[i](laterals[i + 1], laterals[i])
             for i in range(used_backbone_levels - 1)
         ]
-        return memory_list
+        return laterals
 
 
 @MODELS.register_module()

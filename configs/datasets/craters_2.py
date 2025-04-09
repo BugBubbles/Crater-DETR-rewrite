@@ -124,7 +124,7 @@ metainfo = dict(
 data_root = '/home/temp/CraterDetect/'
 dataset_type = 'CocoDataset'
 val_dataloader = dict(
-    batch_size=4,
+    batch_size=2,
     dataset=dict(
         ann_file='annotations/val2.json',
         backend_args=None,
@@ -146,7 +146,7 @@ val_evaluator = dict(
     type='CraterCocoMetric')
 
 test_dataloader = dict(
-    batch_size=4,
+    batch_size=2,
     dataset=dict(
         ann_file='annotations/val2.json',
         backend_args=None,
@@ -170,7 +170,7 @@ test_evaluator = dict(
 
 train_dataloader = dict(
     batch_sampler=dict(type='AspectRatioBatchSampler'),
-    batch_size=4,
+    batch_size=2,
     dataset=dict(
         ann_file='annotations/train2.json',
         backend_args=None,

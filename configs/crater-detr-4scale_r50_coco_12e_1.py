@@ -29,9 +29,11 @@ model = dict(
         out_channels=256,
         type='ChannelMapper'),
     fpn=dict(
-        in_channels=[256, 256, 256, 256],
+        in_channels=256,
         out_channels=256,
-        downsample_cfg=dict(mode='nearest'),
+        num_levels=4,
+        ksize=3,
+        stride=2,
         type='CraterDETRFPN',
     ),
     bbox_head=dict(

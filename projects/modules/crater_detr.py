@@ -243,7 +243,7 @@ class CraterDETR(DeformableDETR):
         w, h = spatial_shapes[-1]
         # CRAU and CRAP pyramid features
         memory = memory[:, -w * h :].permute(0, 2, 1).view(bs, c, w, h)
-        memory_list = self.fpn(img_feats, memory, spatial_shapes)
+        memory_list = self.fpn(img_feats, memory)
 
         # pred_maps = self.aux_bbox_head(memory_list)[0]
         aux_head_output = (
