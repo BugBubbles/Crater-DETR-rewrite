@@ -11,7 +11,7 @@ param_scheduler = [
         end=50,
         gamma=0.1,
         milestones=[
-            10,20,30,40
+            25,50
         ],
         type='MultiStepLR'),
 ]
@@ -24,4 +24,4 @@ optim_wrapper = dict(
     type='OptimWrapper')
 
 
-train_cfg = dict(max_epochs=50, type='EpochBasedTrainLoop', val_interval=1)
+train_cfg = dict(max_epochs=200, type='EpochBasedTrainLoop', val_interval=10)

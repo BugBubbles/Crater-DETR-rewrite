@@ -1,5 +1,5 @@
 _base_ = ['./datasets/craters_1.py', 
-          './schedular/50epochs.py', 
+          './schedular/200epochs.py', 
           './default_runtime.py']
 custom_imports = dict(
     allow_failed_imports=False, imports=[
@@ -7,9 +7,12 @@ custom_imports = dict(
     ])
 
 model = dict(
+    type='CraterDETR',
     as_two_stage=True,
     num_queries=900,
     with_box_refine=True,
+    aux_start_level=0,
+    aux_end_level=3,
     backbone=dict(
         depth=50,
         frozen_stages=1,
@@ -48,8 +51,6 @@ model = dict(
         num_classes=1,
         sync_cls_avg_factor=True,
         type='SOSDINOHead'),
-    aux_start_level=0,
-    aux_end_level=3,
     aux_bbox_head=dict(
         type="AACLAYOLOV3Head",
         num_classes=1,
@@ -65,17 +66,9 @@ model = dict(
           featmap_strides=[64, 32, 32]),
     data_preprocessor=dict(
         bgr_to_rgb=True,
-        mean=[
-            123.675,
-            116.28,
-            103.53,
-        ],
+        mean=[123.675,116.28,103.53],
         pad_size_divisor=1,
-        std=[
-            58.395,
-            57.12,
-            57.375,
-        ],
+        std=[58.395,57.12,57.375],
         type='DetDataPreprocessor'),
     decoder=dict(
         layer_cfg=dict(
@@ -90,8 +83,7 @@ model = dict(
         box_noise_scale=1.0,
         group_cfg=dict(dynamic=True, num_dn_queries=100, num_groups=None),
         label_noise_scale=0.5,
-        type="AdnQueryGenerator",
-        ),
+        type="AdnQueryGenerator"),
     encoder=dict(
         layer_cfg=dict(
             ffn_cfg=dict(
@@ -100,11 +92,7 @@ model = dict(
         num_layers=6),
     positional_encoding=dict(
         normalize=True, num_feats=128, offset=0.0, temperature=20),
-    test_cfg=dict(max_per_img=300,        
-                  nms=dict(iou_threshold=0.5, type='nms'),
-                  nms_pre=1000,
-                  conf_thr=0.4
-                  ),
+    test_cfg=dict(max_per_img=300),
     train_cfg=dict(
         bbox_head=dict(
           assigner=dict(
@@ -119,8 +107,16 @@ model = dict(
                 type='GridAssigner',
                 pos_iou_thr=0.7,
                 neg_iou_thr=0.5,
-                min_pos_iou=0.3))
-            ),
-    type='CraterDETR')
+                min_pos_iou=0.3),
+          aux_cfg=dict(
+                dict(
+                  nms=dict(iou_threshold=0.5, type='nms'),
+                  nms_pre=1000,
+                  max_per_img=300,
+                  conf_thr=0.4)
+                  )
+            )
+        )
+)
 
 work_dir = './logs/crater-detr-4scale_r50_coco_30e'

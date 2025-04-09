@@ -44,7 +44,6 @@ class CraterDETR(DeformableDETR):
         dn_cfg: OptConfigType = None,
         train_cfg: OptConfigType,
         test_cfg: OptConfigType,
-        aux_pred_cfg: OptConfigType = None,
         **kwargs,
     ):
         """
@@ -57,6 +56,7 @@ class CraterDETR(DeformableDETR):
         super().__init__(
             *args, train_cfg=train_cfg["bbox_head"], test_cfg=test_cfg, **kwargs
         )
+        self.aux_cfg = train_cfg["aux_bbox_head"].pop("aux_cfg")
         aux_bbox_head.update(train_cfg=train_cfg["aux_bbox_head"], test_cfg=test_cfg)
         self.aux_bbox_head = MODELS.build(aux_bbox_head)
         self.aux_start_level = aux_start_level
@@ -79,7 +79,6 @@ class CraterDETR(DeformableDETR):
             self.dn_query_generator = TASK_UTILS.build(dn_cfg)
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
-        self.aux_pred_cfg = aux_pred_cfg
 
     def _init_layers(self) -> None:
         """Initialize layers except for backbone, neck and bbox_head."""
@@ -251,7 +250,7 @@ class CraterDETR(DeformableDETR):
             self.aux_bbox_head.forward_aux(
                 memory_list[self.aux_start_level : self.aux_end_level],
                 batch_data_samples,
-                cfg=self.aux_pred_cfg,
+                cfg=self.aux_cfg,
             )
             if self.training
             else None
