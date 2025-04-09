@@ -274,7 +274,6 @@ class SOSDINOHead(DINOHead):
         enc_outputs_coord: Tensor,
         batch_data_samples: SampleList,
         dn_meta: Dict[str, int],
-        aux_head_output: InstanceList,
     ) -> dict:
         """Perform forward propagation and loss calculation of the detection
         head on the queries of the upstream network.
@@ -320,7 +319,6 @@ class SOSDINOHead(DINOHead):
             enc_outputs_coord,
             batch_gt_instances,
             batch_img_metas,
-            aux_head_output,
             dn_meta,
         )
         losses = self.loss_by_feat(*loss_inputs)
@@ -334,7 +332,6 @@ class SOSDINOHead(DINOHead):
         enc_bbox_preds: Tensor,
         batch_gt_instances: InstanceList,
         batch_img_metas: List[dict],
-        aux_head_output: InstanceList,
         dn_meta: Dict[str, int],
         batch_gt_instances_ignore: OptInstanceList = None,
     ) -> Dict[str, Tensor]:
@@ -435,7 +432,7 @@ class SOSDINOHead(DINOHead):
                 adn_loss_dict = super(DeformableDETRHead, self).loss_by_feat(
                     all_layers_adn_cls_scores,
                     all_layers_adn_bbox_preds,
-                    aux_head_output,
+                    batch_gt_instances,
                     batch_img_metas,
                     batch_gt_instances_ignore,
                 )

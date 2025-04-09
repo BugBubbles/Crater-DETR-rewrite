@@ -62,6 +62,7 @@ class CraterDETR(DeformableDETR):
         self.aux_start_level = aux_start_level
         self.aux_end_level = aux_end_level
         self.fpn = MODELS.build(fpn)
+        self.dn_query_generator = None
         if dn_cfg is not None:
             assert (
                 "num_classes" not in dn_cfg
@@ -75,7 +76,7 @@ class CraterDETR(DeformableDETR):
             dn_cfg["num_classes"] = self.bbox_head.num_classes
             dn_cfg["embed_dims"] = self.embed_dims
             dn_cfg["num_matching_queries"] = self.num_queries
-        self.dn_query_generator = TASK_UTILS.build(dn_cfg)
+            self.dn_query_generator = TASK_UTILS.build(dn_cfg)
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.aux_pred_cfg = aux_pred_cfg
@@ -415,7 +416,7 @@ class CraterDETR(DeformableDETR):
         topk_coords_unact = topk_coords_unact.detach()
 
         query = self.query_embedding.weight.repeat(bs, 1, 1)
-        if self.training:
+        if self.training and self.dn_query_generator is not None:
             dn_label_query, dn_bbox_query, dn_mask, dn_meta = self.dn_query_generator(
                 batch_data_samples, aux_head_output
             )
@@ -440,7 +441,6 @@ class CraterDETR(DeformableDETR):
                 enc_outputs_class=topk_score,
                 enc_outputs_coord=topk_coords,
                 dn_meta=dn_meta,
-                aux_head_output=aux_head_output,
             )
             if self.training
             else dict()
@@ -511,7 +511,7 @@ class CraterDETR(DeformableDETR):
             **kwargs,
         )
 
-        if len(query) == self.num_queries:
+        if len(query) == self.num_queries and self.dn_query_generator is not None:
             # NOTE: This is to make sure label_embeding can be involved to
             # produce loss even if there is no denoising query (no ground truth
             # target in this GPU), otherwise, this will raise runtime error in
