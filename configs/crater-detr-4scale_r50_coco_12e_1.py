@@ -1,13 +1,15 @@
 _base_ = ['./datasets/craters_1.py', 
-          './schedular/12epochs.py', 
+          './schedular/50epochs.py', 
           './default_runtime.py']
 custom_imports = dict(
     allow_failed_imports=False, imports=[
-        'projects.Crater-DETR.modules',
+        'projects',
     ])
 
 model = dict(
     as_two_stage=True,
+    num_queries=900,
+    with_box_refine=True,
     backbone=dict(
         depth=50,
         frozen_stages=1,
@@ -15,13 +17,23 @@ model = dict(
         norm_cfg=dict(requires_grad=False, type='BN'),
         norm_eval=True,
         num_stages=4,
-        out_indices=(
-            1,
-            2,
-            3,
-        ),
+        out_indices=(1, 2, 3),
         style='pytorch',
         type='ResNet'),
+    neck=dict(
+        act_cfg=None,
+        in_channels=[512, 1024, 2048],
+        kernel_size=1,
+        norm_cfg=dict(num_groups=32, type='GN'),
+        num_outs=4,
+        out_channels=256,
+        type='ChannelMapper'),
+    fpn=dict(
+        in_channels=[256, 256, 256, 256],
+        out_channels=256,
+        downsample_cfg=dict(mode='nearest'),
+        type='CraterDETRFPN',
+    ),
     bbox_head=dict(
         loss_bbox=dict(loss_weight=5.0, type='L1Loss'),
         loss_cls=dict(
@@ -84,25 +96,6 @@ model = dict(
                 embed_dims=256, feedforward_channels=2048, ffn_drop=0.0),
             self_attn_cfg=dict(dropout=0.0, embed_dims=256, num_levels=4)),
         num_layers=6),
-    neck=dict(
-        act_cfg=None,
-        in_channels=[
-            512,
-            1024,
-            2048,
-        ],
-        kernel_size=1,
-        norm_cfg=dict(num_groups=32, type='GN'),
-        num_outs=4,
-        out_channels=256,
-        type='ChannelMapper'),
-    fpn=dict(
-        in_channels=[256, 256, 256, 256],
-        out_channels=256,
-        downsample_cfg=dict(mode='nearest'),
-        type='CraterDETRFPN',
-    ),
-    num_queries=900,
     positional_encoding=dict(
         normalize=True, num_feats=128, offset=0.0, temperature=20),
     test_cfg=dict(max_per_img=300,        
@@ -126,6 +119,6 @@ model = dict(
                 neg_iou_thr=0.5,
                 min_pos_iou=0.3))
             ),
-    type='CraterDETR',
-    with_box_refine=True)
-work_dir = '../logs/crater-detr-4scale_r50_coco_30e'
+    type='CraterDETR')
+
+work_dir = './logs/crater-detr-4scale_r50_coco_30e'
