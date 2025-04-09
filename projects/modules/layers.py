@@ -5,75 +5,62 @@ import torch.nn.functional as F
 from torch import Tensor
 from mmdet.registry import MODELS
 from mmengine.model import BaseModel
+from mmcv.cnn.bricks.transformer import MultiheadAttention
 from mmdet.utils import ConfigType, MultiConfig, reduce_mean
-from math import sqrt
 from mmdet.models.losses import weighted_loss, QualityFocalLoss
 from mmdet.models.dense_heads import DINOHead, YOLOV3Head, DeformableDETRHead
 from mmdet.structures.bbox import bbox_cxcywh_to_xyxy, bbox_overlaps
 from mmdet.structures import SampleList
 from mmdet.utils import InstanceList, OptInstanceList
+from functools import partial
 
 
 class CRAU(nn.Module):
     def __init__(self, in_channels, ksize=(3, 3), stride=2, padding=1):
         super().__init__()
-        self.w, self.h = ksize
-        self.padding = padding
-        self.stride = stride
         # Project the channel dimension, so we can ues 1x1 conv
-        self.qhead = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 1),
-            nn.Unfold(ksize, stride=stride, padding=padding),
+        self.query_unfold = nn.Unfold(ksize, stride=stride, padding=padding)
+        self.key_value_unfold = nn.Unfold((1, 1))
+        self.query_fold = partial(
+            F.fold, kernel_size=ksize, stride=stride, padding=padding
         )
-        self.vhead = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 1), nn.Unfold((1, 1))
+        self.attn = MultiheadAttention(
+            embed_dims=in_channels, num_heads=8, batch_first=True
         )
-        self.khead = nn.Unfold((1, 1))
+        self.kernel_numel = ksize[0] * ksize[1]
 
     def forward(self, feat: Tensor, src: Tensor) -> Tensor:
         b, c, *size = src.shape
-        v = self.vhead(feat)
-        k = self.khead(feat)
-        q = self.qhead(src).view(b, c, self.w * self.h, -1)
-        A = (
-            torch.einsum("bckd,bcd->bck", q, k).div(sqrt(q.shape[-1])).softmax(-1)
-        )  # k = ksize * ksize, d = h * w
-        weights = torch.einsum("bck,bcd->bckd", A, v).flatten(1, 2)
-        return F.fold(
-            weights, size, (self.w, self.h), stride=self.stride, padding=self.padding
-        ).mul(src)
+        kv = self.key_value_unfold(feat).transpose(1, 2)
+        # unfold from b, c, h, w --> b, c, ksize * ksize, h * w / 4
+        query = self.query_unfold(src).view(b, c, self.kernel_numel, -1)
+        query = query.flatten(2).transpose(1, 2)
+        # for reversable unfold, detail can be refered from https://pytorch.org/docs/2.6/generated/torch.nn.Fold.html#torch.nn.Fold
+        # divisor = torch.ones_like(src)
+        # divisor = self.query_unfold(divisor).view(b, c, self.w * self.h, -1).flatten(2).transpose(1, 2)
+        query = self.attn(query=query, key=kv, value=kv)
+        query = query.transpose(1, 2).view(b, c, self.w * self.h, -1).flatten(1, 2)
+        return self.query_fold(query, output_size=size)
 
 
 class CRAP(nn.Module):
     def __init__(self, in_channels, ksize=(3, 3), stride=2, padding=1):
         super().__init__()
-        self.w, self.h = ksize
-        self.padding = padding
-        self.qhead = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 1), nn.Unfold((1, 1))
+        self.key_value_unfold = nn.Unfold(ksize, stride=stride, padding=padding)
+        self.query_unfold = nn.Unfold((1, 1))
+        self.query_fold = partial(F.fold, kernel_size=(1, 1))
+        self.attn = MultiheadAttention(
+            embed_dims=in_channels, num_heads=8, batch_first=True
         )
-        self.khead = nn.Sequential(
-            nn.Unfold(ksize, stride=stride, padding=1),
-        )
-        self.vhead = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 1),
-            nn.Unfold(ksize, stride=stride, padding=1),
-        )
+        self.kernel_numel = ksize[0] * ksize[1]
 
     def forward(self, feat: Tensor, src: Tensor) -> Tensor:
         b, c, *size = feat.shape
-        q = self.qhead(feat)
-        k = self.khead(src).view(b, c, self.w * self.h, -1)
-        v = self.vhead(src).view(b, c, self.w * self.h, -1)
-        A = (
-            torch.einsum("bcd,bckd->bck", q, k).div(sqrt(q.shape[-1])).softmax(-1)
-        )  # k = ksize * ksize, d = h * w
-        weights = torch.einsum("bck,bckd->bckd", A, v).flatten(1, 2)
-        # stride 取1 而不取self.stride的原因是，注意力权重的形状已经与feat一致了，只需要将其每个像素
-        # 按1x1 卷积的方式整合为原始形状即可
-        return F.fold(
-            weights, size, (self.w, self.h), stride=1, padding=self.padding
-        ).mul(feat)
+        query = self.query_unfold(feat).transpose(1, 2)
+        kv = self.key_value_unfold(src).view(b, c, self.kernel_numel, -1)
+        kv = kv.flatten(2).transpose(1, 2)
+        query = self.attn(query=query, key=kv, value=kv).transpose(1, 2)
+        return self.query_fold(query, output_size=size)
 
 
 @MODELS.register_module()
